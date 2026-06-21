@@ -2,41 +2,39 @@ import pandas as pd
 import pdfplumber
 import pikepdf
 import io
+import re
 
 def process_bank_statement(uploaded_file, password, bank_name):
     try:
-        # 1. Decryption
+        # Decryption
         with pikepdf.open(uploaded_file, password=password) as pdf:
             decrypted_stream = io.BytesIO()
             pdf.save(decrypted_stream)
             decrypted_stream.seek(0)
         
-        # 2. Extraction
-        all_rows = []
+        extracted_data = []
         with pdfplumber.open(decrypted_stream) as pdf_doc:
             for page in pdf_doc.pages:
                 text = page.extract_text()
                 if text:
                     for line in text.split('\n'):
-                        # Line ko space se split karke list mein convert karna
-                        columns = line.split()
-                        if len(columns) >= 3: # Sirf wo line jisme kam se kam 3 words ho
-                            all_rows.append(columns)
+                        # Sirf wohi lines lo jisme Date (DD/MM/YYYY) ho
+                        if re.search(r'\d{2}/\d{2}/\d{4}', line):
+                            parts = line.split()
+                            extracted_data.append(parts)
         
-        # 3. DataFrame Conversion
-        # Pehli line ko header manna
-        if not all_rows:
-            return None
+        # DataFrame mein convert karo
+        df = pd.DataFrame(extracted_data)
+        
+        # Column mapping (Ye logic aapke bank ke format par depend karega)
+        if len(df.columns) >= 4:
+            df = df.iloc[:, :4]
+            df.columns = ['Date', 'Narration', 'Debit', 'Credit']
             
-        df = pd.DataFrame(all_rows[1:], columns=all_rows[0] if len(all_rows[0]) == len(all_rows[1]) else None)
-        
-        # 4. Cleaning (Duplicates hatana)
-        df = df.drop_duplicates(keep='first')
-        
-        # 5. Reset index
-        df = df.reset_index(drop=True)
-        
-        return df
-
-    except Exception as e:
+            # Numeric cleaning for Tally
+            df['Debit'] = pd.to_numeric(df['Debit'].str.replace(',', ''), errors='coerce').fillna(0)
+            df['Credit'] = pd.to_numeric(df['Credit'].str.replace(',', ''), errors='coerce').fillna(0)
+            
+        return df.drop_duplicates()
+    except Exception:
         return None
