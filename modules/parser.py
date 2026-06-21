@@ -6,39 +6,57 @@ import re
 
 def process_bank_statement(uploaded_file, password, bank_name):
     try:
-        with pikepdf.open(uploaded_file, password=password) as pdf:
-            decrypted_stream = io.BytesIO()
-            pdf.save(decrypted_stream)
-            decrypted_stream.seek(0)
+        # Buffer mein file read karein
+        file_buffer = io.BytesIO(uploaded_file.read())
         
+        # Check if password protected
+        try:
+            with pikepdf.open(file_buffer) as pdf:
+                # Agar code yahan bina error ke chal gaya, toh file protected hai
+                # Par hum password try karenge
+                pdf = pikepdf.open(file_buffer, password=password)
+                decrypted_stream = io.BytesIO()
+                pdf.save(decrypted_stream)
+                decrypted_stream.seek(0)
+                file_buffer = decrypted_stream
+        except pikepdf.PasswordError:
+            # Agar error aaya, toh file protected nahi hai ya password wrong hai
+            # Agar file bina password ke khul rahi hai, toh wahi use karein
+            file_buffer.seek(0)
+        except Exception:
+            # File protected nahi hai
+            file_buffer.seek(0)
+        
+        # Data Extraction
         all_data = []
-        with pdfplumber.open(decrypted_stream) as pdf_doc:
+        with pdfplumber.open(file_buffer) as pdf_doc:
             for page in pdf_doc.pages:
-                # 'text' based extraction is more stable than 'table'
                 text = page.extract_text()
                 if not text: continue
                 
                 for line in text.split('\n'):
-                    # Regex for Date (DD/MM/YYYY)
+                    # Date match pattern: DD/MM/YYYY
                     if re.search(r'\d{2}/\d{2}/\d{4}', line):
-                        # Line ko parts mein todein
                         parts = line.split()
                         
-                        # Numerical Mapping Logic:
-                        # Hum assume kar rahe hain Date(0), Narration(1:), Amount1, Amount2, Balance(last)
-                        if len(parts) >= 4:
+                        # Numerical Mapping Logic
+                        try:
                             date = parts[0]
                             balance = float(parts[-1].replace(',', ''))
-                            # Amount extraction (last second, last third)
+                            # Last 2 numbers ko Amount consider karein
                             val1 = float(parts[-3].replace(',', '')) if parts[-3].replace('.','').isdigit() else 0
                             val2 = float(parts[-2].replace(',', '')) if parts[-2].replace('.','').isdigit() else 0
                             
-                            # Normalization Rule:
+                            # Debit/Credit Logic
                             debit, credit = (val1, 0) if val1 < 0 else (0, val1)
+                            narration = " ".join(parts[1:-3])
                             
-                            all_data.append([date, " ".join(parts[1:-3]), debit, credit, balance])
+                            all_data.append([date, narration, debit, credit, balance])
+                        except:
+                            continue
         
         df = pd.DataFrame(all_data, columns=['Date', 'Narration', 'Debit', 'Credit', 'Balance'])
         return df.drop_duplicates()
-    except Exception:
+        
+    except Exception as e:
         return None
