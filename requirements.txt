@@ -1,1 +1,5 @@
-
+streamlit
+pandas
+pikepdf
+pdfplumber
+openpyxl
