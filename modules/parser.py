@@ -11,34 +11,27 @@ def process_bank_statement(uploaded_file, password, bank_name):
             pdf.save(decrypted_stream)
             decrypted_stream.seek(0)
         
-        extracted_rows = []
+        all_transactions = []
         with pdfplumber.open(decrypted_stream) as pdf_doc:
             for page in pdf_doc.pages:
-                # Table extraction focus
-                table = page.extract_table(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
-                if table:
-                    for row in table:
-                        # Row mein se None values hatana
-                        clean_row = [str(cell).replace('\n', ' ') if cell else "" for cell in row]
-                        
-                        # Date pattern check (DD/MM/YYYY)
-                        if any(re.search(r'\d{2}/\d{2}/\d{4}', str(cell)) for cell in clean_row):
-                            extracted_rows.append(clean_row)
-        
-        # DataFrame banayein
-        df = pd.DataFrame(extracted_rows)
-        
-        # Column selection (Humein sirf 5 columns chahiye)
-        # Agar PDF mein 5 se zyada columns hain, toh hum sirf pehle 5 ya specific index lenge
-        if df.shape[1] >= 5:
-            df = df.iloc[:, :5]
-            df.columns = ['Date', 'Narration', 'Debit', 'Credit', 'Balance']
-            
-            # Numeric cleaning
-            for col in ['Debit', 'Credit', 'Balance']:
-                df[col] = df[col].astype(str).str.replace(r'[^\d.]', '', regex=True)
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                text = page.extract_text()
+                if not text: continue
                 
-        return df.drop_duplicates()
+                # Logic: Har bank ki line ka pattern dhoondo (DD/MM/YYYY)
+                lines = text.split('\n')
+                for line in lines:
+                    # Pattern: Date (DD/MM/YYYY) + Narration + Amounts
+                    match = re.search(r'(\d{2}/\d{2}/\d{4})\s+(.*?)\s+([-]?[\d,]+\.\d{2})\s+([-]?[\d,]+\.\d{2})?\s*([\d,]+\.\d{2})?', line)
+                    
+                    if match:
+                        all_transactions.append({
+                            'Date': match.group(1),
+                            'Narration': match.group(2),
+                            'Debit': match.group(3) if float(match.group(3).replace(',','')) < 0 else 0,
+                            'Credit': match.group(3) if float(match.group(3).replace(',','')) > 0 else 0,
+                            'Balance': match.group(5) or 0
+                        })
+        
+        return pd.DataFrame(all_transactions)
     except Exception as e:
         return None
