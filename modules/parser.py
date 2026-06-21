@@ -6,11 +6,10 @@ import re
 
 def process_bank_statement(uploaded_file, password, bank_name):
     try:
-        # File ko memory mein load karein
         file_content = uploaded_file.read()
         file_buffer = io.BytesIO(file_content)
         
-        # 1. TRY: Password-Protected check
+        # 1. Decryption
         try:
             with pikepdf.open(file_buffer, password=password) as pdf:
                 decrypted_stream = io.BytesIO()
@@ -18,35 +17,35 @@ def process_bank_statement(uploaded_file, password, bank_name):
                 decrypted_stream.seek(0)
                 file_buffer = decrypted_stream
         except:
-            # Agar decrypt nahi hua, toh maano bina password ki file hai
             file_buffer.seek(0)
             
-        # 2. PRO-LEVEL TABLE EXTRACTION
-        all_data = []
+        # 2. Strict Table Extraction
+        all_rows = []
         with pdfplumber.open(file_buffer) as pdf_doc:
             for page in pdf_doc.pages:
-                # Table settings for max accuracy
-                table = page.extract_table(table_settings={
-                    "vertical_strategy": "text", 
-                    "horizontal_strategy": "text"
-                })
+                # Sirf table area dhoondhna
+                table = page.extract_table(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
                 if table:
-                    all_data.extend(table)
+                    for row in table:
+                        # Row filter: Date format (DD/MM/YYYY) dhoondo
+                        row_str = " ".join([str(cell) for cell in row if cell])
+                        if re.search(r'\d{2}/\d{2}/\d{4}', row_str):
+                            all_rows.append(row)
         
-        # 3. CLEANING & FORMATTING
-        df = pd.DataFrame(all_data)
+        # 3. DataFrame construction
+        df = pd.DataFrame(all_rows)
         
-        # Row cleaning: Jo rows khali hain ya header hain unhe hatao
-        # (Hum assume kar rahe hain Date format se rows start hoti hain)
-        df = df.dropna(how='all') 
-        
-        # Column Names (Abhishek, agar column names galat aa rahe hain, toh yahan index set kar sakte ho)
-        # Hum 0, 1, 2, 3, 4 index ko standard headers maan rahe hain
+        # 4. Column Alignment Fix: Agar 5 column se zyada hain toh unhe trim karo
         if df.shape[1] >= 5:
             df = df.iloc[:, :5]
             df.columns = ['Date', 'Narration', 'Debit', 'Credit', 'Balance']
             
-        return df
+            # Numeric conversion (Clean data for Tally)
+            for col in ['Debit', 'Credit', 'Balance']:
+                df[col] = df[col].astype(str).str.replace(r'[^\d.]', '', regex=True)
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                
+        return df.drop_duplicates()
         
-    except Exception as e:
+    except Exception:
         return None
