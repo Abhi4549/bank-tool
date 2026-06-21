@@ -1,38 +1,52 @@
 import pandas as pd
 import pdfplumber
+import pikepdf
 import io
 import re
 
 def process_bank_statement(uploaded_file, password, bank_name):
-    # PNB file ke liye optimized logic
     try:
-        all_data = []
-        with pdfplumber.open(uploaded_file) as pdf:
+        # Buffer mein file read
+        file_buffer = io.BytesIO(uploaded_file.read())
+        
+        # 1. Decryption (Optional)
+        try:
+            with pikepdf.open(file_buffer, password=password) as pdf:
+                decrypted_stream = io.BytesIO()
+                pdf.save(decrypted_stream)
+                decrypted_stream.seek(0)
+                file_buffer = decrypted_stream
+        except:
+            file_buffer.seek(0)
+            
+        all_rows = []
+        with pdfplumber.open(file_buffer) as pdf:
             for page in pdf.pages:
-                # Text extract karo
-                text = page.extract_text()
-                if not text: continue
+                # PNB ki table extract karo
+                table = page.extract_table(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
+                if table:
+                    for row in table:
+                        # Row check: Date format "DD/MM/YYYY"
+                        row_str = " ".join([str(c) for c in row if c])
+                        if re.search(r'\d{2}/\d{2}/\d{4}', row_str):
+                            # Clean each cell
+                            clean_row = [str(c).replace('\n', ' ') if c else "" for c in row]
+                            all_rows.append(clean_row)
+        
+        # DataFrame mein convert
+        df = pd.DataFrame(all_rows)
+        
+        # Column Selection (PNB structure: Date, Remarks, Ref, Withdraw, Deposit, Balance)
+        # Hum sirf 6 columns le rahe hain
+        if df.shape[1] >= 6:
+            df = df.iloc[:, [0, 1, 3, 4, 5]]
+            df.columns = ['Date', 'Narration', 'Debit', 'Credit', 'Balance']
+            
+            # Numeric conversion
+            for col in ['Debit', 'Credit', 'Balance']:
+                df[col] = df[col].astype(str).str.replace(r'[^\d.]', '', regex=True)
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
-                # Har line ko check karo
-                for line in text.split('\n'):
-                    # PNB pattern: Date + Remarks + RefNo + Withdraw + Deposit + Balance
-                    # Regex se date dhoondo
-                    if re.match(r'\d{2}/\d{2}/\d{4}', line):
-                        # Line ko split karo aur cleaning karo
-                        parts = line.split()
-                        
-                        # Logic: PNB ka structure fix hai
-                        # 0:Date, 1:Remarks (mixed), -3:Withdraw, -2:Deposit, -1:Balance
-                        date = parts[0]
-                        withdraw = parts[-3].replace('₹', '').replace(',', '')
-                        deposit = parts[-2].replace('₹', '').replace(',', '')
-                        balance = parts[-1].replace('₹', '').replace(',', '')
-                        narration = " ".join(parts[1:-3])
-                        
-                        all_data.append([date, narration, withdraw, deposit, balance])
-        
-        df = pd.DataFrame(all_data, columns=['Date', 'Narration', 'Debit', 'Credit', 'Balance'])
-        return df
-        
-    except Exception as e:
+        return df.drop_duplicates()
+    except Exception:
         return None
