@@ -11,27 +11,34 @@ def process_bank_statement(uploaded_file, password, bank_name):
             pdf.save(decrypted_stream)
             decrypted_stream.seek(0)
         
-        all_transactions = []
+        all_data = []
         with pdfplumber.open(decrypted_stream) as pdf_doc:
             for page in pdf_doc.pages:
+                # 'text' based extraction is more stable than 'table'
                 text = page.extract_text()
                 if not text: continue
                 
-                # Logic: Har bank ki line ka pattern dhoondo (DD/MM/YYYY)
-                lines = text.split('\n')
-                for line in lines:
-                    # Pattern: Date (DD/MM/YYYY) + Narration + Amounts
-                    match = re.search(r'(\d{2}/\d{2}/\d{4})\s+(.*?)\s+([-]?[\d,]+\.\d{2})\s+([-]?[\d,]+\.\d{2})?\s*([\d,]+\.\d{2})?', line)
-                    
-                    if match:
-                        all_transactions.append({
-                            'Date': match.group(1),
-                            'Narration': match.group(2),
-                            'Debit': match.group(3) if float(match.group(3).replace(',','')) < 0 else 0,
-                            'Credit': match.group(3) if float(match.group(3).replace(',','')) > 0 else 0,
-                            'Balance': match.group(5) or 0
-                        })
+                for line in text.split('\n'):
+                    # Regex for Date (DD/MM/YYYY)
+                    if re.search(r'\d{2}/\d{2}/\d{4}', line):
+                        # Line ko parts mein todein
+                        parts = line.split()
+                        
+                        # Numerical Mapping Logic:
+                        # Hum assume kar rahe hain Date(0), Narration(1:), Amount1, Amount2, Balance(last)
+                        if len(parts) >= 4:
+                            date = parts[0]
+                            balance = float(parts[-1].replace(',', ''))
+                            # Amount extraction (last second, last third)
+                            val1 = float(parts[-3].replace(',', '')) if parts[-3].replace('.','').isdigit() else 0
+                            val2 = float(parts[-2].replace(',', '')) if parts[-2].replace('.','').isdigit() else 0
+                            
+                            # Normalization Rule:
+                            debit, credit = (val1, 0) if val1 < 0 else (0, val1)
+                            
+                            all_data.append([date, " ".join(parts[1:-3]), debit, credit, balance])
         
-        return pd.DataFrame(all_transactions)
-    except Exception as e:
+        df = pd.DataFrame(all_data, columns=['Date', 'Narration', 'Debit', 'Credit', 'Balance'])
+        return df.drop_duplicates()
+    except Exception:
         return None
